@@ -1,0 +1,161 @@
+# =============================================================================
+# 大模型提示词（自定义检测 → AI 生成规则）
+# -----------------------------------------------------------------------------
+# 模板变量用 {code} {name} {kind} {unit} {low} {high} {bit_width} {quantum}
+# {period_s} {stats} {catalog} 等，缺变量不会报错（原样保留）。
+# 改提示词不需要动代码，重启即生效。
+# =============================================================================
+
+system: |
+  你是工业设备预测性维护（PHM）领域的判据设计专家，熟悉旋转机械、振动、液压、
+  热管理与电气系统的典型失效模式：超限、跳变/野值、死值冻结、噪声膨胀、速率异常、
+  计数停摆、状态字故障位、状态驻留超时、相关性劣化、成对偏置、数据缺口等。
+
+  你的任务：根据给定测点的数据画像（统计量），从算法清单中选择合适的算法并配置参数，
+  输出若干条可直接执行的检测规则。
+
+  要求：
+  1. 只能使用清单中列出的算法编号，且算法的 supported_kinds 必须包含该测点的值域形态。
+  2. 参数名必须与清单完全一致，不要臆造参数；未列出的参数不要输出。
+  3. 阈值必须有依据：结合数据画像的分位数、极差与量纲，不要照抄默认值。
+     例如越限判据的上/下界应略宽于 q01/q99 之外，跳变判据的绝对地板应大于正常单拍差分的 p99。
+  4. 2~4 条规则，覆盖不同失效模式，避免全部都是阈值越限。
+  5. 只输出 JSON，不要解释文字，不要在 JSON 前后加任何内容。
+
+  输出 JSON 结构：
+  {
+    "analysis": "对这段数据的一句话总体判断（中文，40 字以内）",
+    "rules": [
+      {
+        "name": "规则名称（中文，10 字以内）",
+        "algo_id": "A-01",
+        "params": {"mode": "outside", "low": 0.5, "high": 44.5, "k": 3, "level": "严重"},
+        "reason": "为什么这样配（中文，30 字以内）"
+      }
+    ]
+  }
+
+user: |
+  测点代号：{code}
+  测点名称：{name}
+  值域形态：{kind}（continuous=连续量 / enum=枚举 / counter=计数 / bitfield=状态字 / flag=布尔）
+  工程单位：{unit}
+  设计值域：{range}
+  位宽：{bit_width} bit；1 LSB = {quantum}
+  标称采样周期：{period_s} s
+  数据画像：{stats}
+
+  可用算法清单：
+  {catalog}
+
+  请针对该测点输出 {min_rules}~{max_rules} 条规则。
+
+# 算法清单里不展示的参数（对选算法没有意义的内部参数）
+catalog_hide_params: [min_samples, max_points]
+
+# 期望规则条数（同时写进 user 提示词）
+min_rules: 2
+max_rules: 4
+
+# 请求体固定开销（各模型提供商要求略有不同，集中在这里改）
+request_defaults:
+  stream: false
+
+# -----------------------------------------------------------------------------
+# 模型服务专属参数（随 request_defaults 一起合并进请求体）
+# -----------------------------------------------------------------------------
+# Qwen3 系列默认开启「思考模式」，会先产出数千 thinking token 再给答案：
+#   规则生成是结构化输出任务，不需要长链思考，因此显式关闭。
+# 若换成非 Qwen3 模型或该字段被服务端忽略，删掉这一段即可（不会报错）。
+chat_template_kwargs:
+  enable_thinking: false
+
+# =============================================================================
+# 本地启发式兜底规则（模型不可达 / 用户勾选「仅用本地启发式」时使用）
+# -----------------------------------------------------------------------------
+# 这是"模型不可用时的降级判据"，口径同样应该可调，所以不写死在 code 里。
+#
+# 可用变量（在字符串里以 {xxx} 引用，缺变量原样保留）：
+#   {level}       本条 severity 对应的中文等级名（取自 app.yaml → levels）
+#   {low} {high}  测点设计值域
+#   {q01} {q99}   数据 1% / 99% 分位
+#   {diff_p99}    正常单拍差分的 99% 分位
+#   {span}        值域跨度（high - low，至少有下限保护）
+#   {a_abs}       跳变绝对地板 = max(diff_p99 × severity.jump_scale, span × jitter_span_ratio)
+#   {step_thr}    振荡步长门限 = a_abs / jitter_div
+#   {n_dead}      冻结点数 = 冻结时长秒 / 采样周期
+#   {period_s}    标称采样周期
+#
+# 每条规则：
+#   when       仅在该值域形态下生成（可选，缺省表示所有形态）
+#   algo_id    算法编号
+#   params     参数模板（值可以是字符串模板）
+#   reason     生成理由（写进规则备注）
+# =============================================================================
+fallback:
+  # 各条的 severity 决定 {level} 填什么；顺序即生成顺序
+  jump_scale: 3.0
+  jitter_span_ratio: 0.02
+  jitter_div: 4.0
+  freeze_seconds: 120
+
+  rules:
+    - name: 越界判据
+      when: [continuous, counter, enum, flag]
+      severity: 严重
+      algo_id: A-01
+      params:
+        mode: outside
+        low: "{low}"
+        high: "{high}"
+        k: 3
+        level: "{level}"
+      reason: 按设计值域上下界设越界，连续 3 拍确认去抖
+
+    - name: 单拍跳变
+      when: [continuous]
+      severity: 严重
+      algo_id: A-03
+      params:
+        window: 31
+        z: 3.5
+        a_abs: "{a_abs}"
+        lsb_floor: 3.0
+        two_stage: true
+        level: "{level}"
+      reason: 绝对地板取正常单拍差分 p99 的 3 倍，高于量化抖动
+
+    - name: 振荡判据
+      when: [continuous]
+      severity: 一般
+      algo_id: A-22
+      params:
+        window_s: 60.0
+        min_changes: 10
+        min_reversals: 3
+        step_thr: "{step_thr}"
+        level: "{level}"
+      reason: 60 s 窗内变化次数与翻转次数同时超限才判振荡
+
+    - name: 死值冻结
+      when: [continuous]
+      severity: 一般
+      algo_id: A-02
+      params:
+        n_dead: "{n_dead}"
+        tolerance: 0.0
+        level: "{level}"
+      reason: 连续约 2 分钟逐位不变即判冻结
+
+    - name: 数据缺口
+      severity: 一般
+      algo_id: A-27
+      params:
+        gap_k: 2.5
+        min_gap_points: 2
+        max_loss_ratio: 0.05
+        level: "{level}"
+      reason: 超过 2.5 倍包周期无数据即判中断
+
+  analysis_template: >-
+    模型不可达，已用本地统计口径生成 {count} 条规则：均值 {mean}，σ {std}，单拍差分 p99 {diff_p99}

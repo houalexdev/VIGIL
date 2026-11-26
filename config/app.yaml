@@ -1,0 +1,141 @@
+# =============================================================================
+# VIGIL · 应用主配置
+# -----------------------------------------------------------------------------
+# 这里的所有值都可以用环境变量覆盖，优先级：
+#   环境变量 > 本文件 > 代码内默认值（app/config.py 只保留最小兜底，不再是配置源）
+#
+# 支持用 VIGIL_CONFIG 指向另一个 YAML 文件做整体替换（多环境部署用）。
+# =============================================================================
+
+app:
+  name: VIGIL
+  subtitle: 工业设备预测性维护软件
+  module: 异常数据检测
+  version: "1.0"
+
+server:
+  # 环境变量 VIGIL_HOST / VIGIL_PORT
+  host: 0.0.0.0
+  port: 8080
+  title: "{name} · {subtitle} · {module}"
+  favicon: ""
+  dark: true
+  reload: false
+  show: false
+
+# -----------------------------------------------------------------------------
+# 路径。相对路径相对于项目根目录（含 algorithm/ 的那一层）。
+# 环境变量 VIGIL_DATA 可整体替换数据根目录。
+# -----------------------------------------------------------------------------
+paths:
+  data: data                       # 数据根，环境变量 VIGIL_DATA
+  parquet: "${data}/parquet"       # 测点数据落盘根
+  db: "${data}/vigil.db"           # SQLite 索引，环境变量 VIGIL_DB
+  user_algorithms: user_algorithms # 用户自定义算法源码目录
+  logs: "${data}/runs"             # 运行日志
+
+# -----------------------------------------------------------------------------
+# 大模型（自定义检测 → AI 生成规则）
+# -----------------------------------------------------------------------------
+llm:
+  base_url: http://localhost:8000/v1   # 环境变量 VIGIL_LLM_URL（OpenAI 兼容，默认本地无服务）
+  # 留空表示不鉴权：Key 为空时不会发送 Authorization 头
+  api_key: ""                                # 环境变量 VIGIL_LLM_KEY
+  model: qwen2.5-7b-instruct                 # 环境变量 VIGIL_LLM_MODEL
+  timeout: 60                             # 环境变量 VIGIL_LLM_TIMEOUT；整个调用（含多端点重试）的总预算
+  probe_timeout: 15.0                     # 启动时连通性探测超时
+  temperature: 0.2
+  top_p: 0.9
+  max_tokens: 2048                        # 结构化 JSON 输出，2048 足够
+  # 依次尝试的接口挂载点，兼容 OpenAI 风格与 vLLM/SGLang 原生路径
+  endpoints:
+    - /chat/completions
+
+# -----------------------------------------------------------------------------
+# 告警等级：颜色 / 中文名 / 数值序 全部在此定义，新增等级只需加一行
+# -----------------------------------------------------------------------------
+levels:
+  order: [L1, L2, L3, L4]
+  items:
+    L1: {cn: 提示, color: "#38bdf8", css: "#7dd3fc", bg: "rgba(56, 189, 248, .12)",  border: "rgba(56, 189, 248, .35)"}
+    L2: {cn: 一般, color: "#fbbf24", css: "#fcd34d", bg: "rgba(251, 191, 36, .12)", border: "rgba(251, 191, 36, .35)"}
+    L3: {cn: 严重, color: "#fb7185", css: "#fda4af", bg: "rgba(251, 113, 133, .13)", border: "rgba(251, 113, 133, .38)"}
+    L4: {cn: 致命, color: "#ef4444", css: "#fca5a5", bg: "rgba(239, 68, 68, .16)",  border: "rgba(239, 68, 68, .45)"}
+  fallback_color: "#94a3b8"
+  fallback_css: "#64748b"
+
+# 值域形态枚举 → 中文名（算法的 SUPPORTED_KINDS 用左边这组英文键）
+value_kinds:
+  continuous: 连续量
+  enum: 枚举量
+  counter: 计数量
+  bitfield: 状态字
+  flag: 布尔位
+
+# -----------------------------------------------------------------------------
+# 时间窗口：界面上快捷按钮与默认窗口
+# -----------------------------------------------------------------------------
+windows:
+  default_hours: 12
+  presets: [1, 4, 12, 24]     # 快捷按钮（小时）
+  min_points: 120             # 序列最少采样点（窗口过短时抬采样密度）
+
+# -----------------------------------------------------------------------------
+# 模拟数据生成
+# -----------------------------------------------------------------------------
+simulate:
+  max_points: 9000            # 单序列采样点上限（控制前端渲染与算力）
+  min_period_s: 1.0
+  # 必须小于 A-03 的 max_gap_s(10s)，否则跳变算法会认为数据中断而自行跳过
+  max_period_s: 9.5
+  nominal_period_s: 1.0       # 标称包周期，自定义检测默认用它
+  lane_lo: 0.28               # 异常注入车道起点（留出开头给基线/参照段）
+  lane_hi: 0.97               # 车道终点
+  max_attempts: 4             # 命中不足时加重重试的轮数
+  min_hits: 5                 # 每条规则最少异常处数（仅配置文件可调，界面不提供输入）
+  # 模拟端无法伪造、需要外部输入的算法：规则里选中时要明确告知而不是硬造数据
+  needs_external:
+    A-06: 基础设施算法，不参与规则检测
+    A-13: 基础设施算法（门控），不参与规则检测
+    A-14: 基础设施算法（状态机），不参与规则检测
+    A-16: 基础设施算法（对齐），不参与规则检测
+    A-18: 基础设施算法（自校准），不参与规则检测
+    A-19: 基础设施算法（段切分），不参与规则检测
+    A-15: 需要原始帧字节（packets），模拟端不提供
+    A-17: 需要参考通道的判定结果，模拟端不提供
+    A-20: 需要离线趋势基线（features），模拟端不提供
+    A-21: 需要离线段模板基线（segments），模拟端不提供
+
+# -----------------------------------------------------------------------------
+# 数据落盘：Parquet / snappy / 按测点代号与日期分目录
+#   {parquet}/{code}/{YYYYMMDD}/{t_start}_{t_end}.parquet
+# -----------------------------------------------------------------------------
+storage:
+  compression: snappy
+  date_dir_format: "%Y%m%d"
+  filename: "{t_start}_{t_end}.parquet"
+  # 列名约定（与 algorithm/base.TelemetrySeries 对齐，不要随意改）
+  columns:
+    t: t
+    v: v
+    quality: quality
+
+# -----------------------------------------------------------------------------
+# 前端渲染
+# -----------------------------------------------------------------------------
+ui:
+  chart_max_points: 1600      # 折线抽稀目标点数（异常点不抽稀）
+  table_rows_per_page: 10
+  tab_label_len: 7            # 规则分页标题里规则名截断长度
+  collapse_params: [min_samples, max_points, level]   # 参数摘要里省略的"噪声"参数
+  param_summary_max: 6        # 参数摘要最多显示几项
+  anomaly_columns:            # 异常点表格列（顺序即显示顺序）
+    - {name: time,        label: 时间,    field: time,        align: left,   sortable: true}
+    - {name: level,       label: 等级,    field: level,       align: left}
+    - {name: hit_type,    label: 命中类型, field: hit_type,    align: left}
+    - {name: algo,        label: 算法,    field: algo,        align: left}
+    - {name: value_s,     label: 触发值,   field: value_s,     align: right}
+    - {name: threshold_s, label: 阈值,    field: threshold_s, align: right}
+    - {name: duration_s,  label: "持续(s)", field: duration_s, align: right, sortable: true}
+    - {name: dimension,   label: 定位,    field: dimension,   align: left}
+    - {name: note,        label: 说明,    field: note,        align: left}

@@ -1,0 +1,488 @@
+# =============================================================================
+# 测点目录（Point Catalog）
+# -----------------------------------------------------------------------------
+# 算法运行时拿到的 TelemetryMeta 全部由这里构造。
+# 未在此登记的测点会走 `guess_by_prefix` → `unknown_default` 自动兜底，
+# 保证任何代号都不会因为"没建目录"而让算法跑不起来。
+#
+# 场景：工业设备预测性维护（PHM）——旋转机械 / 振动 / 液压 / 热管理 / 电气与PLC。
+#
+# 字段：
+#   code       测点代号（唯一键）
+#   name       中文名称
+#   unit       工程单位（无量纲留空）
+#   kind       continuous / enum / counter / bitfield / flag
+#   low, high  设计值域；枚举/标志类可填同一值表示"期望值"
+#   bit_width  原始码位宽（用于 LSB 计算与位域解析）
+#   quantum    1 LSB 的工程值；0 表示未知
+#   decimals   展示小数位
+#   system     所属子系统
+#   note       备注（会显示在规则编辑器的提示里）
+#   enum       期望值 → 标签，仅 enum/flag/bitfield 用，可省略
+# =============================================================================
+
+# 未登记代号的兜底：按代号前缀猜子系统，值域按连续量给
+guess_by_prefix:
+  SPN: 旋转机械
+  VIB: 振动
+  HYG: 液压
+  TRM: 热管理与润滑
+  ELC: 电气与PLC
+
+unknown_default:
+  name_suffix: （未登记测点）
+  unit: ""
+  kind: continuous
+  low: 0.0
+  high: 100.0
+  bit_width: 16
+  quantum: 0.0
+  decimals: 2
+  note: 目录未收录，按连续量默认值域
+
+# =============================================================================
+# 测点清单
+# =============================================================================
+items:
+  # ---------------------------------------------------------------------------
+  # 旋转机械 —— 主轴 / 电机 / 轴承
+  # ---------------------------------------------------------------------------
+  - code: SPN1001
+    name: 主轴前端轴承温度
+    unit: ℃
+    kind: continuous
+    low: -10.0
+    high: 120.0
+    bit_width: 12
+    quantum: 0.05
+    decimals: 2
+    system: 旋转机械
+    note: 12 bit，0.05 ℃/LSB；正常工作 <90 ℃，报警 100 ℃
+
+  - code: SPN1002
+    name: 电机绕组温度
+    unit: ℃
+    kind: continuous
+    low: -10.0
+    high: 160.0
+    bit_width: 12
+    quantum: 0.05
+    decimals: 2
+    system: 旋转机械
+    note: F 级绝缘，长期 ≤130 ℃；温升速率是关键失效先兆
+
+  - code: SPN1003
+    name: 主轴后端轴承温度
+    unit: ℃
+    kind: continuous
+    low: -10.0
+    high: 120.0
+    bit_width: 12
+    quantum: 0.05
+    decimals: 2
+    system: 旋转机械
+    note: 与 SPN1001 同族，横截面比对可发现单侧润滑失效
+
+  - code: SPN1004
+    name: 主轴箱体温度
+    unit: ℃
+    kind: continuous
+    low: -10.0
+    high: 90.0
+    bit_width: 12
+    quantum: 0.05
+    decimals: 2
+    system: 旋转机械
+    note: 环境温度参照，用于判断温升是否由工况而非故障引起
+
+  - code: SPN2001
+    name: 主轴转速
+    unit: r/min
+    kind: continuous
+    low: 0.0
+    high: 12000.0
+    bit_width: 16
+    quantum: 0.5
+    decimals: 1
+    system: 旋转机械
+    note: 16 bit；加减速段转速斜率受控，突跳属异常
+
+  - code: SPN2002
+    name: 主轴电流有效值
+    unit: A
+    kind: continuous
+    low: 0.0
+    high: 40.0
+    bit_width: 12
+    quantum: 0.01
+    decimals: 2
+    system: 旋转机械
+    note: 与振动 RMS 强相关；电流异常常先于机械故障
+
+  - code: SPN2003
+    name: 主轴输出功率
+    unit: kW
+    kind: continuous
+    low: 0.0
+    high: 30.0
+    bit_width: 12
+    quantum: 0.01
+    decimals: 2
+    system: 旋转机械
+    note: 与转速×转矩一致，可与电流做复合判据
+
+  - code: SPN7001
+    name: 主轴运行模式
+    unit: ""
+    kind: enum
+    low: 0.0
+    high: 3.0
+    bit_width: 2
+    quantum: 1.0
+    decimals: 0
+    system: 旋转机械
+    note: 0=停机 1=待机 2=加工 3=加减速
+    enum:
+      - [0, 停机]
+      - [1, 待机]
+      - [2, 加工]
+      - [3, 加减速]
+
+  - code: SPN7002
+    name: 主轴负载状态
+    unit: ""
+    kind: enum
+    low: 0.0
+    high: 2.0
+    bit_width: 2
+    quantum: 1.0
+    decimals: 0
+    system: 旋转机械
+    note: 0=空载 1=半载 2=满载
+    enum:
+      - [0, 空载]
+      - [1, 半载]
+      - [2, 满载]
+
+  - code: SPN8001
+    name: 主轴累计运行小时
+    unit: h
+    kind: counter
+    low: 0.0
+    high: 65535.0
+    bit_width: 16
+    quantum: 0.1
+    decimals: 1
+    system: 旋转机械
+    note: 16 bit 递增计数（0.1 h/LSB），模 65536；保养周期判据
+
+  - code: SPN8002
+    name: 主轴启停循环计数
+    unit: 次
+    kind: counter
+    low: 0.0
+    high: 65535.0
+    bit_width: 16
+    quantum: 1.0
+    decimals: 0
+    system: 旋转机械
+    note: 16 bit 递增计数；频繁启停会加速轴承疲劳
+
+  - code: SPN9001
+    name: 主轴报警位字
+    unit: ""
+    kind: bitfield
+    low: 0.0
+    high: 0.0
+    bit_width: 16
+    quantum: 1.0
+    decimals: 0
+    system: 旋转机械
+    note: 16 位同包，极性 1=故障；期望值 0
+    enum:
+      - [0, 无报警]
+
+  - code: SPN0001
+    name: 主轴使能状态
+    unit: ""
+    kind: flag
+    low: 0.0
+    high: 1.0
+    bit_width: 1
+    quantum: 1.0
+    decimals: 0
+    system: 旋转机械
+    note: 1=使能；工况门控常用
+
+  # ---------------------------------------------------------------------------
+  # 振动 —— 加速度 / 速度
+  # ---------------------------------------------------------------------------
+  - code: VIB3001
+    name: 主轴前端振动加速度 RMS（X）
+    unit: m/s²
+    kind: continuous
+    low: 0.0
+    high: 50.0
+    bit_width: 16
+    quantum: 0.001
+    decimals: 3
+    system: 振动
+    note: 16 bit，0.001 m/s²/LSB；ISO 10816 分级参照
+
+  - code: VIB3002
+    name: 主轴前端振动加速度 RMS（Y）
+    unit: m/s²
+    kind: continuous
+    low: 0.0
+    high: 50.0
+    bit_width: 16
+    quantum: 0.001
+    decimals: 3
+    system: 振动
+    note: 与 VIB3001 正交安装；两路同时抬升多为共性根因
+
+  - code: VIB3003
+    name: 主轴后端振动速度有效值
+    unit: mm/s
+    kind: continuous
+    low: 0.0
+    high: 30.0
+    bit_width: 16
+    quantum: 0.001
+    decimals: 3
+    system: 振动
+    note: 与前端成对偏置，可区分单侧轴承与整体不对中
+
+  - code: VIB3004
+    name: 齿轮箱振动加速度 RMS
+    unit: m/s²
+    kind: continuous
+    low: 0.0
+    high: 50.0
+    bit_width: 16
+    quantum: 0.001
+    decimals: 3
+    system: 振动
+    note: 齿轮啮合频率相关；噪声膨胀常先于齿面剥落
+
+  # ---------------------------------------------------------------------------
+  # 液压 —— 压力 / 油温
+  # ---------------------------------------------------------------------------
+  - code: HYG4001
+    name: 液压系统压力
+    unit: MPa
+    kind: continuous
+    low: 0.0
+    high: 25.0
+    bit_width: 16
+    quantum: 0.001
+    decimals: 3
+    system: 液压
+    note: 16 bit；压力骤降多为泄漏或泵失效
+
+  - code: HYG4002
+    name: 液压油温
+    unit: ℃
+    kind: continuous
+    low: 0.0
+    high: 80.0
+    bit_width: 12
+    quantum: 0.05
+    decimals: 2
+    system: 液压
+    note: 油温过高会加速密封老化
+
+  - code: HYG4003
+    name: 液压泵累计工作小时
+    unit: h
+    kind: counter
+    low: 0.0
+    high: 65535.0
+    bit_width: 16
+    quantum: 0.1
+    decimals: 1
+    system: 液压
+    note: 16 bit 递增计数（0.1 h/LSB）
+
+  # ---------------------------------------------------------------------------
+  # 热管理与润滑 —— 冷却 / 润滑
+  # ---------------------------------------------------------------------------
+  - code: TRM5001
+    name: 润滑油供油温度
+    unit: ℃
+    kind: continuous
+    low: 0.0
+    high: 80.0
+    bit_width: 12
+    quantum: 0.05
+    decimals: 2
+    system: 热管理与润滑
+    note: 正常工作 35~55 ℃
+
+  - code: TRM5002
+    name: 冷却水出口温度
+    unit: ℃
+    kind: continuous
+    low: 0.0
+    high: 60.0
+    bit_width: 12
+    quantum: 0.05
+    decimals: 2
+    system: 热管理与润滑
+    note: 与 TRM5001 同族，横截面比对发现换热效率下降
+
+  - code: TRM5003
+    name: 润滑油压力
+    unit: MPa
+    kind: continuous
+    low: 0.0
+    high: 1.0
+    bit_width: 12
+    quantum: 0.001
+    decimals: 3
+    system: 热管理与润滑
+    note: 低油压是轴承烧损的直接前兆
+
+  - code: TRM0001
+    name: 冷却泵使能状态
+    unit: ""
+    kind: flag
+    low: 0.0
+    high: 1.0
+    bit_width: 1
+    quantum: 1.0
+    decimals: 0
+    system: 热管理与润滑
+    note: 1=运行；与温度做复合判据（应开未开）
+
+  # ---------------------------------------------------------------------------
+  # 电气与 PLC —— 变频器 / 母线 / 状态字
+  # ---------------------------------------------------------------------------
+  - code: ELC6001
+    name: 变频器直流母线电压
+    unit: V
+    kind: continuous
+    low: 0.0
+    high: 800.0
+    bit_width: 16
+    quantum: 0.1
+    decimals: 1
+    system: 电气与PLC
+    note: 三相 380 V 整流后约 537 V；欠压/过压均属故障
+
+  - code: ELC6002
+    name: 电机 A 相电流
+    unit: A
+    kind: continuous
+    low: 0.0
+    high: 60.0
+    bit_width: 12
+    quantum: 0.01
+    decimals: 2
+    system: 电气与PLC
+    note: 与 ELC6003 成对偏置，可发现三相不平衡
+
+  - code: ELC6003
+    name: 电机 B 相电流
+    unit: A
+    kind: continuous
+    low: 0.0
+    high: 60.0
+    bit_width: 12
+    quantum: 0.01
+    decimals: 2
+    system: 电气与PLC
+    note: 与 ELC6002 同构
+
+  - code: ELC7001
+    name: 变频器运行状态
+    unit: ""
+    kind: enum
+    low: 0.0
+    high: 3.0
+    bit_width: 2
+    quantum: 1.0
+    decimals: 0
+    system: 电气与PLC
+    note: 0=停止 1=运行 2=故障 3=停机中
+    enum:
+      - [0, 停止]
+      - [1, 运行]
+      - [2, 故障]
+      - [3, 停机中]
+
+  - code: ELC8001
+    name: 变频器故障累计计数
+    unit: 次
+    kind: counter
+    low: 0.0
+    high: 65535.0
+    bit_width: 16
+    quantum: 1.0
+    decimals: 0
+    system: 电气与PLC
+    note: 16 bit 递增计数；恒为 0，非 0 单拍即报
+
+  - code: ELC8002
+    name: 设备累计报警计数
+    unit: 次
+    kind: counter
+    low: 0.0
+    high: 65535.0
+    bit_width: 16
+    quantum: 1.0
+    decimals: 0
+    system: 电气与PLC
+    note: 16 bit 递增计数
+
+  - code: ELC9001
+    name: PLC 输入状态字
+    unit: ""
+    kind: bitfield
+    low: 65535.0
+    high: 65535.0
+    bit_width: 16
+    quantum: 1.0
+    decimals: 0
+    system: 电气与PLC
+    note: 16 位同包，极性 0=信号丢失（故障）；期望值 65535
+    enum:
+      - [65535, 全部正常]
+
+  - code: ELC9002
+    name: 变频器诊断标志字
+    unit: ""
+    kind: bitfield
+    low: 0.0
+    high: 0.0
+    bit_width: 16
+    quantum: 1.0
+    decimals: 0
+    system: 电气与PLC
+    note: 16 位同包，极性 1=故障；期望值 0
+    enum:
+      - [0, 无故障]
+
+  - code: ELC0001
+    name: 急停按钮状态
+    unit: ""
+    kind: flag
+    low: 0.0
+    high: 0.0
+    bit_width: 1
+    quantum: 1.0
+    decimals: 0
+    system: 电气与PLC
+    note: 0=未按下，1=急停；期望值 0
+
+  - code: ELC0002
+    name: 安全联锁状态
+    unit: ""
+    kind: flag
+    low: 1.0
+    high: 1.0
+    bit_width: 1
+    quantum: 1.0
+    decimals: 0
+    system: 电气与PLC
+    note: 1=联锁闭合允许运行；期望值 1
