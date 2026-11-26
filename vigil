@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""VIGIL 命令行入口。
+
+等价于 `python -m app.cli`，但不需要在意当前工作目录与 PYTHONPATH：
+
+    ./vigil --help
+    ./vigil rule list
+    ./vigil detect scene -s S-SPIN -H 12
+
+解释器选择：优先当前解释器；若它缺依赖，则在候选列表里挑第一个装齐依赖的转交过去。
+可用 VIGIL_PY=/path/to/python 强制指定；VIGIL_DEBUG=1 可看到跳过了哪些。
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+
+_DEPS = ("yaml", "numpy", "pandas", "pyarrow", "httpx")
+
+# 宿主注入的这些变量会让子进程导入到 shim 目录，而不是 venv 里的真实包
+_POLLUTED = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")
+
+
+def _clean_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for k in _POLLUTED:
+        env.pop(k, None)
+    return env
+
+
+def _debug(msg: str) -> None:
+    if os.environ.get("VIGIL_DEBUG"):
+        sys.stderr.write(f"[vigil] {msg}\n")
+
+
+def _has_deps(exe: str) -> bool:
+    """在子进程里探一次依赖，避免污染当前进程。"""
+    code = "import " + ", ".join(_DEPS)
+    try:
+        r = subprocess.run([exe, "-c", code], capture_output=True,
+                           timeout=60, env=_clean_env())
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _candidates() -> list[str]:
+    raw: list[str] = []
+    env = os.environ.get("VIGIL_PY", "").strip()
+    if env:
+        raw.append(env)
+    raw.append(sys.executable)
+    raw += [
+        str(ROOT / ".venv" / "bin" / "python"),
+        str(ROOT / "venv" / "bin" / "python"),
+        os.path.expanduser("~/.workbuddy/binaries/python/envs/default/bin/python"),
+        "python3",
+    ]
+    # 去重只按「路径字符串」做，绝不能按 realpath：
+    # venv 的 bin/python 通常是指向 base python 的软链，两者 realpath 相同，
+    # 但 sys.prefix / site-packages 完全不同——按 realpath 去重会把 venv 整个漏掉。
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in raw:
+        if not p:
+            continue
+        key = os.path.abspath(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _pick() -> str | None:
+    for exe in _candidates():
+        if _has_deps(exe):
+            return exe
+        _debug(f"跳过 {exe}（缺依赖）")
+    return None
+
+
+def _has_local_deps() -> bool:
+    try:
+        import yaml  # noqa: F401
+        import numpy  # noqa: F401
+        import pandas  # noqa: F401
+        import pyarrow  # noqa: F401
+        import httpx  # noqa: F401
+    except ModuleNotFoundError:
+        return False
+    return True
+
+
+def _reexec(exe: str) -> None:
+    # -E 忽略 PYTHON* 环境变量，-s 不加载用户 site-packages：
+    # 保证转交后的解释器只用自己的环境，不被宿主的 shim 干扰
+    argv = [exe, "-E", "-s", str(Path(__file__).resolve()), *sys.argv[1:]]
+    raise SystemExit(subprocess.call(argv, env=_clean_env()))
+
+
+def main() -> int:
+    if not _has_local_deps():
+        # 注意：不能按 realpath 比较——venv 的 python 与 base python 是同一个文件，
+        # 但 site-packages 不同，必须原样按路径比较
+        if sys.executable != os.path.realpath(sys.executable):
+            pass
+        exe = _pick()
+        if exe and exe != sys.executable and os.path.exists(exe):
+            _debug(f"转交给 {exe}")
+            _reexec(exe)
+        sys.stderr.write(
+            "[vigil] 缺少依赖，请先安装：\n"
+            f"    {sys.executable} -m pip install -r {ROOT / 'requirements.txt'}\n"
+            "或用 VIGIL_PY=/path/to/python ./vigil ... 指定解释器\n"
+        )
+        return 3
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from app.cli import main as cli_main
+
+    return cli_main()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
